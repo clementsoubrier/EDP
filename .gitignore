@@ -1,8 +1,5 @@
 /.conda
-/PDES.pdf
-/Presentation.odp
-/Presentation.pdf
+*.pdf
+*.odp
 /Schnakenberg1D
-/file.pdf
-/log.txt
-/revised.pdf
+*.txt
