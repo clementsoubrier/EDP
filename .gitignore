@@ -3,3 +3,5 @@
 *.odp
 /Schnakenberg1D
 *.txt
+/out_gmsh
+/ParaView
