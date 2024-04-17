@@ -122,11 +122,7 @@ def run_simulation(init = False, initval=None):
     file2 = XDMFFile(MPI.COMM_WORLD, "Schnakenberg1D/outputu2.xdmf", "w")
     file2.write_mesh(msh)
 
-    # reporting values
-    u1 = u.sub(0)
-    u2 = u.sub(1)
-    file1.write_function(u1, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
-    file2.write_function(u2, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
+    
     
     # Interpolate initial condition
     u.sub(0).interpolate(lambda x: (bu-au)*np.random.rand(x.shape[1]) +au)
@@ -138,11 +134,16 @@ def run_simulation(init = False, initval=None):
         u.x.array[:] = initval
         
     u0.x.array[:] = u.x.array
+    # reporting values
+    u1 = u.sub(0).collapse()
+    u2 = u.sub(1).collapse()
+    file1.write_function(u1, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
+    file2.write_function(u2, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
+    
     x_array[0] = msh.geometry.x[:,0]
     msh.geometry.x[:,0] += v_1
-    uv_array[0,:,0] = u.x.array[::2]
-    uv_array[0,:,1] = u.x.array[1::2]
-    uv_array[0,1,0], uv_array[0,0,1] = uv_array[0,0,1], uv_array[0,1,0]
+    uv_array[0,:,0] = u1.x.array
+    uv_array[0,:,1] = u2.x.array
 
 
     if init:
@@ -179,11 +180,11 @@ def run_simulation(init = False, initval=None):
             # reporting values
             x_array[i] = msh.geometry.x[:,0]
             
-            u1 = u.sub(0)
-            u2 = u.sub(1)
-            uv_array[i,:,0] = u.x.array[::2]
-            uv_array[i,:,1] = u.x.array[1::2]
-            uv_array[i,1,0], uv_array[i,0,1] = uv_array[i,0,1], uv_array[i,1,0]
+            u1 = u.sub(0).collapse()
+            u2 = u.sub(1).collapse()
+            x_array[i] = msh.geometry.x[:,0]
+            uv_array[i,:,0] = u1.x.array
+            uv_array[i,:,1] = u2.x.array
             
             u0.x.array[:] = u.x.array
             msh.geometry.x[:,0] += v_1
@@ -229,13 +230,12 @@ def run_simulation(init = False, initval=None):
             print(f"Step {i}: num iterations: {r[0]}")
             
             # reporting values
-            x_array[i] = msh.geometry.x[:,0]
             
-            u1 = u.sub(0)
-            u2 = u.sub(1)
-            uv_array[i,:,0] = u.x.array[::2]
-            uv_array[i,:,1] = u.x.array[1::2]
-            uv_array[i,1,0], uv_array[i,0,1] = uv_array[i,0,1], uv_array[i,1,0]
+            u1 = u.sub(0).collapse()
+            u2 = u.sub(1).collapse()
+            x_array[i] = msh.geometry.x[:,0]
+            uv_array[i,:,0] = u1.x.array
+            uv_array[i,:,1] = u2.x.array
             
             u0.x.array[:] = u.x.array
             msh.geometry.x[:,0] += v_1

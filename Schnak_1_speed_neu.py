@@ -108,16 +108,15 @@ def run_simulation():
 
     # reporting values
     l2_norm = []
-    u1 = u.sub(0)
-    u2 = u.sub(1)
+    u1 = u.sub(0).collapse()
+    u2 = u.sub(1).collapse()
     file1.write_function(u1, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
     file2.write_function(u2, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
     u0.x.array[:] = u.x.array
     
     x_array[0] = msh.geometry.x[:,0]
-    uv_array[0,:,0] = u.x.array[::2]
-    uv_array[0,:,1] = u.x.array[1::2]
-    uv_array[0,1,0], uv_array[0,0,1] = uv_array[0,0,1], uv_array[0,1,0]
+    uv_array[0,:,0] = u1.x.array
+    uv_array[0,:,1] = u2.x.array
 
 
 
@@ -172,12 +171,11 @@ def run_simulation():
         
         # reporting values
         l2_norm.append(np.linalg.norm(u.x.array-u0.x.array)/dt)
-        u1 = u.sub(0)
-        u2 = u.sub(1)
+        u1 = u.sub(0).collapse()
+        u2 = u.sub(1).collapse()
         x_array[i] = msh.geometry.x[:,0]
-        uv_array[i,:,0] = u.x.array[::2]
-        uv_array[i,:,1] = u.x.array[1::2]
-        uv_array[i,1,0], uv_array[i,0,1] = uv_array[i,0,1], uv_array[i,1,0]
+        uv_array[i,:,0] = u1.x.array
+        uv_array[i,:,1] = u2.x.array
         
         u0.x.array[:] = u.x.array
         # updating mesh geometry

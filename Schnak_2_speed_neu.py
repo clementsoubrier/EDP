@@ -64,6 +64,7 @@ def run_simulation():
     cell_number = 100       # cell number for the mesh
     v_0 = 0.       # speed of left pole
     v_1 = 0.0002           # speed of right pole
+    v_2 = 0.0005
     mid_point = cell_number//2
 
     uv_array = np.zeros((step_number+1, cell_number+1, 2))  # initalize solutions
@@ -128,16 +129,15 @@ def run_simulation():
 
     # reporting values
     l2_norm = []
-    u1 = u.sub(0)
-    u2 = u.sub(1)
+    u1 = u.sub(0).collapse()
+    u2 = u.sub(1).collapse()
     file1.write_function(u1, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
     file2.write_function(u2, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
     u0.x.array[:] = u.x.array
     
     x_array[0] = msh.geometry.x[:,0]
-    uv_array[0,:,0] = u.x.array[::2]
-    uv_array[0,:,1] = u.x.array[1::2]
-    uv_array[0,1,0], uv_array[0,0,1] = uv_array[0,0,1], uv_array[0,1,0]
+    uv_array[0,:,0] = u1.x.array
+    uv_array[0,:,1] = u2.x.array
 
 
 
@@ -188,16 +188,18 @@ def run_simulation():
         
         # reporting values
         l2_norm.append(np.linalg.norm(u.x.array-u0.x.array)/dt)
-        u1 = u.sub(0)
-        u2 = u.sub(1)
+        u1 = u.sub(0).collapse()
+        u2 = u.sub(1).collapse()
         x_array[i] = msh.geometry.x[:,0]
-        uv_array[i,:,0] = u.x.array[::2]
-        uv_array[i,:,1] = u.x.array[1::2]
-        uv_array[i,1,0], uv_array[i,0,1] = uv_array[i,0,1], uv_array[i,1,0]
+        uv_array[i,:,0] = u1.x.array
+        uv_array[i,:,1] = u2.x.array
         
         u0.x.array[:] = u.x.array
         # updating mesh geometry
-        update_msh(msh, v_0, v_1, mid_point)
+        if i<1500:
+            update_msh(msh, v_0, v_1, mid_point)
+        else:
+            update_msh(msh, v_0, v_2, mid_point)
 
         
         # Save solution to file (VTK)
