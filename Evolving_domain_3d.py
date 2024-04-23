@@ -65,12 +65,9 @@ def create_3d_cell_mesh(name):
     model.addPhysicalGroup(3, volume_entities, tag=2)
     model.setPhysicalName(3, 2, "Volume")
     gmsh.option.setNumber("Mesh.MeshSizeFactor", 0.5)
-    # gmsh.option.setNumber("Mesh.MeshSizeMax", 0.3)
-    # gmsh.option.setNumber("Mesh.MeshSizeMax", 0.3)
     model.mesh.generate(dim=3)
     
     model.setCurrent("cell")
-    
     filename = f"out_gmsh/mesh_rank_{MPI.COMM_WORLD.rank}.xdmf"
     msh, ct, ft = gmshio.model_to_mesh(model, MPI.COMM_SELF, rank=0)
     msh.name = name
@@ -90,16 +87,38 @@ def create_3d_cell_mesh(name):
 
 
 
-def update_msh(m, v0, v1):
+def update_msh_1(m, v0, v1):
     x_cord = m.geometry.x[:,0]
     min_x = np.min(x_cord)
     max_x = np.max(x_cord)
     d0 = (min_x-v0)/min_x
     d1 = (max_x+v1)/max_x
-    mov = d0 * (x_cord<0).astype(float) + d1 * (x_cord>0).astype(float)
+    mov = d0 * (x_cord<0).astype(float) + d1 * (x_cord>0).astype(float) 
 
 
     m.geometry.x[:,0] = m.geometry.x[:,0]*mov
+    
+
+def update_msh_2(m, v0, v1):
+    x_cord = m.geometry.x[:,0]
+    
+    min_x = np.min(x_cord)
+    max_x = np.max(x_cord)
+    left_s = min_x + 0.5
+    right_s = max_x - 0.5
+    
+    point_l = -1
+    point_r = 1
+    
+    mov = np.zeros(np.shape(x_cord))
+    mov[x_cord<=left_s] = -v0
+    mov[x_cord>=right_s] = v1
+    mask = np.logical_and(x_cord > left_s, x_cord < point_l)
+    mov[mask] = v0*(x_cord[mask] - point_l)/(point_l-left_s)
+    mask = np.logical_and(x_cord < right_s, x_cord > point_r)
+    mov[mask] = v1*(x_cord[mask] - point_r)/(right_s - point_r)
+
+    m.geometry.x[:,0] = m.geometry.x[:,0] + mov
     
     
     
@@ -120,14 +139,15 @@ def run_simulation():
     # Next, various model parameters are defined:
 
     dt = 5.0e-04            # time step
-    step_number = 5000      # time step number
+    step_number = 4000      # time step number
+    step_ini = 1000
+    
     time_range = np.linspace(0, step_number* dt,  step_number+1)
+    time_ini = np.linspace(0, step_ini* dt,  step_ini+1)
     
     v_0 = 0.0005        # speed of left pole
     v_1 = 0.0005           # speed of right pole
-
-    # uv_array = np.zeros((step_number+1, cell_number+1, 2))  # initalize solutions
-    # x_array = np.zeros((step_number+1, cell_number+1))      # initalize mesh geometry
+    norm_stop = 0.1e-6  
 
     #initial conditions
     au = 1
@@ -139,7 +159,7 @@ def run_simulation():
 
     k = dt
     d = 10
-    gamma = 500
+    gamma = 100
     a = 0.1
     b = 0.9
 
@@ -158,7 +178,7 @@ def run_simulation():
     ME_test = functionspace(msh, P1)
     q_test = ufl.TestFunction(ME_test)
     u_test = ufl.TrialFunction(ME_test)
-    a_mass_mat =form( u_test * q_test * dx)
+    a_mass_mat = form( u_test * q_test * dx)
     mass_mat = assemble_matrix(a_mass_mat)
     old_mass = mass_mat.to_dense()
 
@@ -182,7 +202,44 @@ def run_simulation():
     u.x.scatter_forward()
     
 
-    
+    for i, t in enumerate(time_ini[1:]):
+        
+        
+        u0.x.array[:] = u.x.array
+        u1, u2 = ufl.split(u)
+        u10, u20 = ufl.split(u0)
+        
+        
+        # Weak formulation (specific term for mass matrix variation)
+        F = u1/k*q*dx + d1*inner(grad(u1), grad(q))*dx\
+            -(gamma*(u1*u1*u2-u1+a))*q*dx \
+            - (u10/k)*q*dx \
+            + u2/k*v*dx + d2*inner(grad(u2), grad(v))*dx\
+            -(gamma*(-u1*u1*u2+b))*v*dx \
+            - (u20/k)*v*dx
+
+
+        # Create nonlinear problem and Newton solver
+        problem = NonlinearProblem(F, u)
+        solver = NewtonSolver(MPI.COMM_WORLD, problem)
+        solver.convergence_criterion = "incremental"
+        solver.rtol = np.sqrt(np.finfo(default_real_type).eps) * 1e-2
+        ksp = solver.krylov_solver
+        opts = PETSc.Options()  
+        option_prefix = ksp.getOptionsPrefix()
+        opts[f"{option_prefix}ksp_type"] = "preonly"
+        opts[f"{option_prefix}pc_type"] = "lu"
+        ksp.setFromOptions()
+
+        i+=1
+        # solving the variational problem
+        r = solver.solve(u)
+        print(f"Initial Step {i}: num iterations: {r[0]}")
+        
+        if np.linalg.norm(u.x.array-u0.x.array)/dt < norm_stop:
+            print("l2_norm convergence")
+            break
+        
 
     
     # Output file
@@ -198,9 +255,6 @@ def run_simulation():
     file2.write_function(u2, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
     u0.x.array[:] = u.x.array
     
-    # x_array[0] = msh.geometry.x[:,0]
-    # uv_array[0,:,0] = u1.x.array
-    # uv_array[0,:,1] = u2.x.array
 
 
 
@@ -256,13 +310,10 @@ def run_simulation():
         # reporting values
         u1 = u.sub(0).collapse()
         u2 = u.sub(1).collapse()
-        # x_array[i] = msh.geometry.x[:,0]
-        # uv_array[i,:,0] = u1.x.array
-        # uv_array[i,:,1] = u2.x.array
         
         u0.x.array[:] = u.x.array
         # updating mesh geometry
-        update_msh(msh, v_0, v_1)
+        update_msh_2(msh, v_0, v_1)
 
         old_mass = new_mass
 
