@@ -131,9 +131,9 @@ def run_simulation():
     
     # Next, various model parameters are defined:
 
-    dt = 5.0e-04            # time step
-    step_number = 2000      # time step number
-    step_ini = 1000
+    dt = 5e-4          # time step 5.0e-04 
+    step_number = 3000      # time step number
+    step_ini = 3000
     
     time_range = np.linspace(0, step_number* dt,  step_number+1)
     time_ini = np.linspace(0, step_ini* dt,  step_ini+1)
@@ -152,7 +152,7 @@ def run_simulation():
 
     k = dt
     d = 10
-    gamma = 100
+    gamma = 40
     a = 0.1
     b = 0.9
 

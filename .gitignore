@@ -7,3 +7,4 @@
 *.txt
 /out_gmsh
 /ParaView
+/gmsh
