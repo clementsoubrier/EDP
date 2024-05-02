@@ -152,7 +152,7 @@ def run_simulation():
 
     k = dt
     d = 10
-    gamma = 40
+    gamma = 300
     a = 0.1
     b = 0.9
 

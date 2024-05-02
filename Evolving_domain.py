@@ -40,7 +40,7 @@ def update_msh(m, v0, v1, midpoint):
     
     
     
-def run_simulation():
+def run_simulation(d=None, gamma=None):
     """Simulation of RD system on evolving domains
 
     Returns:
@@ -57,8 +57,8 @@ def run_simulation():
     # Next, various model parameters are defined:
 
     dt = 5.0e-04            # time step
-    step_number = 3000      # time step number
-    step_ini = 1000
+    step_number = 4000      # time step number
+    step_ini = 2000
     
     time_range = np.linspace(0, step_number* dt,  step_number+1)
     time_ini = np.linspace(0, step_ini* dt,  step_ini+1)
@@ -81,8 +81,10 @@ def run_simulation():
     # Parameters for weak statement of the equations
 
     k = dt
-    d = 10
-    gamma = 100
+    if d is None:
+        d = 10
+    if gamma is None:
+        gamma = 100
     a = 0.1
     b = 0.9
 
@@ -316,15 +318,20 @@ def plot(time_range, x_array, uv_array, spacenum, timenum):
     ax.set_xlabel('x')
     ax.set_ylabel('V(x)')
     ax.set_zlabel('T')
-    plt.show()
+    # plt.show()
     
     
     
     
 def main():
+    # param = [(10,29),(10,100), (10, 250), (10, 470), (9, 700), (9, 1000), (8.6, 1400), (8.6, 1900)]
+    # for elem in param :
+    #     time_range, x_array, uv_array = run_simulation(d=elem[0], gamma=elem[1])
+    #     plot(time_range, x_array, uv_array, 100, 50)
+    # plt.show()
+    
     time_range, x_array, uv_array = run_simulation()
     plot(time_range, x_array, uv_array, 100, 50)
-    
     
     
 if __name__ == '__main__':
