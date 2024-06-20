@@ -1,29 +1,25 @@
 
 # # Schnakenberg model
 # +
-import os
-
 from mpi4py import MPI
 from petsc4py import PETSc
 
 import numpy as np
 import scipy
 
-import matplotlib.pyplot as plt
-import matplotlib.colors as mplc
+
 
 import gmsh
 
 
 import ufl
 from basix.ufl import element, mixed_element
-from dolfinx import default_real_type, log, plot, mesh
-from dolfinx.fem import Function, functionspace, Expression, FunctionSpaceBase, assemble_matrix, form
+from dolfinx import default_real_type, log
+from dolfinx.fem import Function, functionspace, assemble_matrix, form
 from dolfinx.fem.petsc import NonlinearProblem
 from dolfinx.io import XDMFFile, gmshio
-from dolfinx.mesh import CellType, create_unit_square, GhostMode
 from dolfinx.nls.petsc import NewtonSolver
-from ufl import dx, grad, inner, SpatialCoordinate
+from ufl import dx, grad, inner
 
 
 

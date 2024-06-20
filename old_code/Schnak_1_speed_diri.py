@@ -11,18 +11,21 @@ import math
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as mplc
+from matplotlib import cm
 
 
 import ufl
 from basix.ufl import element, mixed_element
 from dolfinx import default_real_type, log, plot, mesh
-from dolfinx.fem import Function, functionspace, Expression, FunctionSpaceBase, Constant, dirichletbc, Function, FunctionSpace, locate_dofs_geometrical, locate_dofs_topological
+from dolfinx.fem import Function, functionspace, assemble_matrix, form, dirichletbc, Function, locate_dofs_geometrical
 from dolfinx.fem.petsc import NonlinearProblem
 from dolfinx.io import XDMFFile
-from dolfinx.mesh import CellType, create_unit_square, GhostMode
+from dolfinx.mesh import GhostMode
 from dolfinx.nls.petsc import NewtonSolver
-from ufl import dx, grad, inner, SpatialCoordinate
+from ufl import dx, grad, inner
 from petsc4py.PETSc import ScalarType
+import scipy
+
 
 
 def boundary_D(x):
@@ -65,15 +68,17 @@ def run_simulation():
 
     #initial conditions
     au = 1
+    bound1 = au + 0.4
     bu = 1.1
     av = 0.9
+    bound2 = av - 0.4
     bv = 0.95
 
     # Parameters for weak statement of the equations
 
     k = dt
     d = 10
-    gamma = 500
+    gamma = 800
     a = 0.1
     b = 0.9
 
@@ -88,7 +93,15 @@ def run_simulation():
                                 ghost_mode=GhostMode.shared_facet)
     P1 = element("Lagrange", msh.basix_cell(), 1)
     ME = functionspace(msh, mixed_element([P1, P1]))
-
+    
+    
+    #extracting stiffness matrix
+    ME_test = functionspace(msh, P1)
+    q_test = ufl.TestFunction(ME_test)
+    u_test = ufl.TrialFunction(ME_test)
+    a_mass_mat =form( u_test * q_test * dx)
+    mass_mat = assemble_matrix(a_mass_mat)
+    old_mass = mass_mat.to_dense()
     # Trial and test functions of the space `ME` are now defined:
 
     q, v = ufl.TestFunctions(ME)
@@ -112,7 +125,7 @@ def run_simulation():
     file2.write_mesh(msh)
 
     # reporting values
-    l2_norm = []
+    # l2_norm = []
     u1 = u.sub(0).collapse()
     u2 = u.sub(1).collapse()
     file1.write_function(u1, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
@@ -144,24 +157,46 @@ def run_simulation():
         ME1, _ = ME.sub(1).collapse()
         dofs_D1 = locate_dofs_geometrical((ME.sub(0), ME0), boundary_D)
         dofs_D2 = locate_dofs_geometrical((ME.sub(1), ME1), boundary_D)
-        bc_1 = dirichletbc(ScalarType(au), dofs_D1[0], ME.sub(0))
-        bc_2 = dirichletbc(ScalarType(av), dofs_D2[0], ME.sub(1))
+        bc_1 = dirichletbc(ScalarType(bound1), dofs_D1[0], ME.sub(0))
+        bc_2 = dirichletbc(ScalarType(bound2), dofs_D2[0], ME.sub(1))
 
-
-
-        # # Weak formulation (original)
-        # F = ((u1 - u10) / k)*q*dx + d1*inner(grad(u1), grad(q))*dx\
-        # -(gamma*(u1*u1*u2-u1+a))*q*dx \
-        # + ((u2 - u20) / k)*v*dx + d2*inner(grad(u2), grad(v))*dx\
-        # -(gamma*(-u1*u1*u2+b))*v*dx 
+        ME_test = functionspace(msh, P1)
+        q_test = ufl.TestFunction(ME_test)
+        u_test = ufl.TrialFunction(ME_test)
+        a_mass_mat =form( u_test * q_test * dx)
+        mass_mat = assemble_matrix(a_mass_mat)
+        new_mass = mass_mat.to_dense()
+        u10 = u0.sub(0).collapse()
+        u20 = u0.sub(1).collapse()
+        inv_new = scipy.linalg.inv(new_mass)
+        u10.x.array[:] = inv_new @ old_mass @ u10.x.array
+        u20.x.array[:] = inv_new @ old_mass @ u20.x.array
+        
+        u1, u2 = ufl.split(u)
+        u10, u20 = ufl.split(u0)
+        
         
         # Weak formulation (specific term for mass matrix variation)
         F = u1/k*q*dx + d1*inner(grad(u1), grad(q))*dx\
             -(gamma*(u1*u1*u2-u1+a))*q*dx \
-            - (u10/k*m_mass_var_1)*q*dx \
+            - (u10/k)*q*dx \
             + u2/k*v*dx + d2*inner(grad(u2), grad(v))*dx\
             -(gamma*(-u1*u1*u2+b))*v*dx \
-            - (u20/k*m_mass_var_2)*v*dx
+            - (u20/k)*v*dx
+
+        # # # Weak formulation (original)
+        # # F = ((u1 - u10) / k)*q*dx + d1*inner(grad(u1), grad(q))*dx\
+        # # -(gamma*(u1*u1*u2-u1+a))*q*dx \
+        # # + ((u2 - u20) / k)*v*dx + d2*inner(grad(u2), grad(v))*dx\
+        # # -(gamma*(-u1*u1*u2+b))*v*dx 
+        
+        # # Weak formulation (specific term for mass matrix variation)
+        # F = u1/k*q*dx + d1*inner(grad(u1), grad(q))*dx\
+        #     -(gamma*(u1*u1*u2-u1+a))*q*dx \
+        #     - (u10/k*m_mass_var_1)*q*dx \
+        #     + u2/k*v*dx + d2*inner(grad(u2), grad(v))*dx\
+        #     -(gamma*(-u1*u1*u2+b))*v*dx \
+        #     - (u20/k*m_mass_var_2)*v*dx
 
 
         # Create nonlinear problem and Newton solver
@@ -180,7 +215,7 @@ def run_simulation():
         print(f"Step {i}: num iterations: {r[0]}")
         
         # reporting values
-        l2_norm.append(np.linalg.norm(u.x.array-u0.x.array)/dt)
+        # l2_norm.append(np.linalg.norm(u.x.array-u0.x.array)/dt)
         u1 = u.sub(0).collapse()
         u2 = u.sub(1).collapse()
         x_array[i] = msh.geometry.x[:,0]
@@ -206,9 +241,9 @@ def run_simulation():
         file2.write_function(u2, t, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
 
 
-        if l2_norm[-1] < norm_stop:
-            print("l2_norm convergence")
-            break
+        # if l2_norm[-1] < norm_stop:
+        #     print("l2_norm convergence")
+        #     break
     
 
 
@@ -220,6 +255,45 @@ def run_simulation():
 
 
 
+# def plot(time_range, x_array, uv_array, spacenum, timenum):
+#     """Plotting the solution of the PDE
+
+#     Args:
+#         time_range (1d array): time of the solutions
+#         x_array (2d array): mesh geometry over time
+#         uv_array (3d array): values of solutions over time
+#         spacenum (int): number of space steps for plot
+#         timenum (int): number of time steps for plot
+#     """
+#     # extracting data at the right place
+#     T_steps = np.linspace(0, len(time_range)-1, timenum, dtype=int)
+#     x_steps = np.linspace(0, len(x_array[0])-1, spacenum, dtype=int)
+    
+#     vmin = np.min(uv_array[:,:,1][T_steps][:,x_steps])
+#     vmax = np.max(uv_array[:,:,1][T_steps][:,x_steps])
+#     umin = np.min(uv_array[:,:,0][T_steps][:,x_steps])
+#     umax = np.max(uv_array[:,:,0][T_steps][:,x_steps])
+    
+#     # plotting U
+#     ax = plt.figure().add_subplot(projection='3d')
+#     plt.title('U')
+#     for i in T_steps:
+#         ax.scatter(x_array[i][x_steps], uv_array[i,:,0][x_steps], zs=time_range[i], zdir='z', c=uv_array[i,:,0][x_steps], cmap="viridis", edgecolor='none', norm=mplc.Normalize(vmin=umin, vmax=umax))
+#     ax.set_xlabel('x')
+#     ax.set_ylabel('U(x)')
+#     ax.set_zlabel('T')
+    
+#     # plotting V
+#     ax = plt.figure().add_subplot(projection='3d')
+#     plt.title('V')
+#     for i in T_steps:
+#         ax.scatter(x_array[i][x_steps], uv_array[i,:,1][x_steps], zs=time_range[i], zdir='z', c=uv_array[i,:,1][x_steps], cmap="viridis", edgecolor='none', norm=mplc.Normalize(vmin=vmin, vmax=vmax)) 
+#     ax.set_xlabel('x')
+#     ax.set_ylabel('V(x)')
+#     ax.set_zlabel('T')
+#     plt.show()
+    
+     
 def plot(time_range, x_array, uv_array, spacenum, timenum):
     """Plotting the solution of the PDE
 
@@ -230,6 +304,7 @@ def plot(time_range, x_array, uv_array, spacenum, timenum):
         spacenum (int): number of space steps for plot
         timenum (int): number of time steps for plot
     """
+
     # extracting data at the right place
     T_steps = np.linspace(0, len(time_range)-1, timenum, dtype=int)
     x_steps = np.linspace(0, len(x_array[0])-1, spacenum, dtype=int)
@@ -240,30 +315,30 @@ def plot(time_range, x_array, uv_array, spacenum, timenum):
     umax = np.max(uv_array[:,:,0][T_steps][:,x_steps])
     
     # plotting U
-    ax = plt.figure().add_subplot(projection='3d')
+    fig, ax = plt.subplots()
     plt.title('U')
     for i in T_steps:
-        ax.scatter(x_array[i][x_steps], uv_array[i,:,0][x_steps], zs=time_range[i], zdir='z', c=uv_array[i,:,0][x_steps], cmap="viridis", edgecolor='none', norm=mplc.Normalize(vmin=umin, vmax=umax))
+        ax.scatter(x_array[i][x_steps], time_range[i]* np.ones(len(x_steps)), c=uv_array[i,:,0][x_steps], cmap="viridis", edgecolor='none', norm=mplc.Normalize(vmin=umin, vmax=umax))
     ax.set_xlabel('x')
-    ax.set_ylabel('U(x)')
-    ax.set_zlabel('T')
+    ax.set_ylabel('T')
+    fig.colorbar(cm.ScalarMappable(norm=mplc.Normalize(vmin=umin, vmax=umax), cmap="viridis"), ax=ax)
     
     # plotting V
-    ax = plt.figure().add_subplot(projection='3d')
+    fig, ax = plt.subplots()
     plt.title('V')
     for i in T_steps:
-        ax.scatter(x_array[i][x_steps], uv_array[i,:,1][x_steps], zs=time_range[i], zdir='z', c=uv_array[i,:,1][x_steps], cmap="viridis", edgecolor='none', norm=mplc.Normalize(vmin=vmin, vmax=vmax)) 
+        ax.scatter(x_array[i][x_steps], time_range[i]* np.ones(len(x_steps)), c=uv_array[i,:,1][x_steps], cmap="viridis", edgecolor='none', norm=mplc.Normalize(vmin=vmin, vmax=vmax)) 
     ax.set_xlabel('x')
-    ax.set_ylabel('V(x)')
-    ax.set_zlabel('T')
-    plt.show()
-    
+    ax.set_ylabel('T')
+    fig.colorbar(cm.ScalarMappable(norm=mplc.Normalize(vmin=umin, vmax=umax), cmap="viridis"), ax=ax)
+    # plt.show()
     
     
     
 def main():
     time_range, x_array, uv_array = run_simulation()
-    plot(time_range, x_array, uv_array, 100, 50)
+    plot(time_range, x_array, uv_array, 200, 50)
+    plt.show()
     
     
     

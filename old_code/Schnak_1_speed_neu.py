@@ -13,15 +13,20 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mplc
 
 
+from matplotlib import cm
+
+
 import ufl
 from basix.ufl import element, mixed_element
 from dolfinx import default_real_type, log, plot, mesh
-from dolfinx.fem import Function, functionspace, Expression, FunctionSpaceBase
+from dolfinx.fem import Function, functionspace, assemble_matrix, form, dirichletbc, Function, locate_dofs_geometrical
 from dolfinx.fem.petsc import NonlinearProblem
 from dolfinx.io import XDMFFile
-from dolfinx.mesh import CellType, create_unit_square, GhostMode
+from dolfinx.mesh import GhostMode
 from dolfinx.nls.petsc import NewtonSolver
-from ufl import dx, grad, inner, SpatialCoordinate
+from ufl import dx, grad, inner
+from petsc4py.PETSc import ScalarType
+import scipy
 
 
 def update_msh(m, v1):
@@ -84,6 +89,14 @@ def run_simulation():
     P1 = element("Lagrange", msh.basix_cell(), 1)
     ME = functionspace(msh, mixed_element([P1, P1]))
 
+    #extracting stiffness matrix
+    ME_test = functionspace(msh, P1)
+    q_test = ufl.TestFunction(ME_test)
+    u_test = ufl.TrialFunction(ME_test)
+    a_mass_mat =form( u_test * q_test * dx)
+    mass_mat = assemble_matrix(a_mass_mat)
+    old_mass = mass_mat.to_dense()
+    
     # Trial and test functions of the space `ME` are now defined:
 
     q, v = ufl.TestFunctions(ME)
@@ -127,31 +140,45 @@ def run_simulation():
         x_m = msh.geometry.x[:,0]
         m_mass_var.x.array[:] = (1+v_1/(x_m[-1]-x_m[0]))**(-2)
 
-        # Split mixed functions
-
+        ME_test = functionspace(msh, P1)
+        q_test = ufl.TestFunction(ME_test)
+        u_test = ufl.TrialFunction(ME_test)
+        a_mass_mat =form( u_test * q_test * dx)
+        mass_mat = assemble_matrix(a_mass_mat)
+        new_mass = mass_mat.to_dense()
+        u10 = u0.sub(0).collapse()
+        u20 = u0.sub(1).collapse()
+        inv_new = scipy.linalg.inv(new_mass)
+        u10.x.array[:] = inv_new @ old_mass @ u10.x.array
+        u20.x.array[:] = inv_new @ old_mass @ u20.x.array
+        
         u1, u2 = ufl.split(u)
         u10, u20 = ufl.split(u0)
-        m_mass_var_1, m_mass_var_2 = ufl.split(m_mass_var)
-
-
         
-        
-
-
-
-        # # Weak formulation (original)
-        # F = ((u1 - u10) / k)*q*dx + d1*inner(grad(u1), grad(q))*dx\
-        # -(gamma*(u1*u1*u2-u1+a))*q*dx \
-        # + ((u2 - u20) / k)*v*dx + d2*inner(grad(u2), grad(v))*dx\
-        # -(gamma*(-u1*u1*u2+b))*v*dx 
         
         # Weak formulation (specific term for mass matrix variation)
         F = u1/k*q*dx + d1*inner(grad(u1), grad(q))*dx\
             -(gamma*(u1*u1*u2-u1+a))*q*dx \
-            - (u10/k*m_mass_var_1)*q*dx \
+            - (u10/k)*q*dx \
             + u2/k*v*dx + d2*inner(grad(u2), grad(v))*dx\
             -(gamma*(-u1*u1*u2+b))*v*dx \
-            - (u20/k*m_mass_var_2)*v*dx
+            - (u20/k)*v*dx
+
+
+
+        # # # Weak formulation (original)
+        # # F = ((u1 - u10) / k)*q*dx + d1*inner(grad(u1), grad(q))*dx\
+        # # -(gamma*(u1*u1*u2-u1+a))*q*dx \
+        # # + ((u2 - u20) / k)*v*dx + d2*inner(grad(u2), grad(v))*dx\
+        # # -(gamma*(-u1*u1*u2+b))*v*dx 
+        
+        # # Weak formulation (specific term for mass matrix variation)
+        # F = u1/k*q*dx + d1*inner(grad(u1), grad(q))*dx\
+        #     -(gamma*(u1*u1*u2-u1+a))*q*dx \
+        #     - (u10/k*m_mass_var_1)*q*dx \
+        #     + u2/k*v*dx + d2*inner(grad(u2), grad(v))*dx\
+        #     -(gamma*(-u1*u1*u2+b))*v*dx \
+        #     - (u20/k*m_mass_var_2)*v*dx
 
 
         # Create nonlinear problem and Newton solver
@@ -227,23 +254,24 @@ def plot(time_range, x_array, uv_array, spacenum, timenum):
     umax = np.max(uv_array[:,:,0][T_steps][:,x_steps])
     
     # plotting U
-    ax = plt.figure().add_subplot(projection='3d')
+    fig, ax = plt.subplots()
     plt.title('U')
     for i in T_steps:
-        ax.scatter(x_array[i][x_steps], uv_array[i,:,0][x_steps], zs=time_range[i], zdir='z', c=uv_array[i,:,0][x_steps], cmap="viridis", edgecolor='none', norm=mplc.Normalize(vmin=umin, vmax=umax))
+        ax.scatter(x_array[i][x_steps], time_range[i]* np.ones(len(x_steps)), c=uv_array[i,:,0][x_steps], cmap="viridis", edgecolor='none', norm=mplc.Normalize(vmin=umin, vmax=umax))
     ax.set_xlabel('x')
-    ax.set_ylabel('U(x)')
-    ax.set_zlabel('T')
+    ax.set_ylabel('T')
+    fig.colorbar(cm.ScalarMappable(norm=mplc.Normalize(vmin=umin, vmax=umax), cmap="viridis"), ax=ax)
     
     # plotting V
-    ax = plt.figure().add_subplot(projection='3d')
+    fig, ax = plt.subplots()
     plt.title('V')
     for i in T_steps:
-        ax.scatter(x_array[i][x_steps], uv_array[i,:,1][x_steps], zs=time_range[i], zdir='z', c=uv_array[i,:,1][x_steps], cmap="viridis", edgecolor='none', norm=mplc.Normalize(vmin=vmin, vmax=vmax)) 
+        ax.scatter(x_array[i][x_steps], time_range[i]* np.ones(len(x_steps)), c=uv_array[i,:,1][x_steps], cmap="viridis", edgecolor='none', norm=mplc.Normalize(vmin=vmin, vmax=vmax)) 
     ax.set_xlabel('x')
-    ax.set_ylabel('V(x)')
-    ax.set_zlabel('T')
-    plt.show()
+    ax.set_ylabel('T')
+    fig.colorbar(cm.ScalarMappable(norm=mplc.Normalize(vmin=umin, vmax=umax), cmap="viridis"), ax=ax)
+    # plt.show()
+    
     
     
     
@@ -251,7 +279,7 @@ def plot(time_range, x_array, uv_array, spacenum, timenum):
 def main():
     time_range, x_array, uv_array = run_simulation()
     plot(time_range, x_array, uv_array, 100, 50)
-    
+    plt.show()
     
     
 if __name__ == '__main__':

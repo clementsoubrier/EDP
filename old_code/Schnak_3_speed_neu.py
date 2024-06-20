@@ -1,29 +1,34 @@
 
 # # Schnakenberg model
 # +
+import os
+
 from mpi4py import MPI
 from petsc4py import PETSc
 
 import numpy as np
-import scipy
-
+import math
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as mplc
+
 from matplotlib import cm
+
 
 import ufl
 from basix.ufl import element, mixed_element
 from dolfinx import default_real_type, log, plot, mesh
-from dolfinx.fem import Function, functionspace, assemble_matrix, form
+from dolfinx.fem import Function, functionspace, assemble_matrix, form, dirichletbc, Function, locate_dofs_geometrical
 from dolfinx.fem.petsc import NonlinearProblem
 from dolfinx.io import XDMFFile
 from dolfinx.mesh import GhostMode
 from dolfinx.nls.petsc import NewtonSolver
 from ufl import dx, grad, inner
+from petsc4py.PETSc import ScalarType
+import scipy
 
 
-def update_msh(m, v0, v1, midpoint):
+def update_msh(m, v0, v1, midpoint0, midpoint1):
     x_cord = m.geometry.x[:,0]
     mov = np.zeros(np.shape(x_cord))
 
@@ -31,15 +36,15 @@ def update_msh(m, v0, v1, midpoint):
     x_1 = x_cord[0]
     
 
-    mov[:midpoint] = v0*(x_cord[:midpoint] - x_cord[midpoint])/(x_cord[midpoint]-x_1)
-    mov[midpoint+1:] = v1*(x_cord[midpoint+1:] - x_cord[midpoint])/(x_2-x_cord[midpoint])
+    mov[:midpoint0] = v0*(x_cord[:midpoint0] - x_cord[midpoint0])/(x_cord[midpoint0]-x_1)
+    mov[midpoint1+1:] = v1*(x_cord[midpoint1+1:] - x_cord[midpoint1])/(x_2-x_cord[midpoint1])
 
 
     m.geometry.x[:,0] = m.geometry.x[:,0]+mov
     
     
     
-def run_simulation(d=None, gamma=None):
+def run_simulation():
     """Simulation of RD system on evolving domains
 
     Returns:
@@ -56,18 +61,16 @@ def run_simulation(d=None, gamma=None):
     # Next, various model parameters are defined:
 
     dt = 5.0e-04            # time step
-    step_number = 3000      # time step number
-    step_ini = 1000
-    
+    step_number = 1500      # time step number
     time_range = np.linspace(0, step_number* dt,  step_number+1)
-    time_ini = np.linspace(0, step_ini* dt,  step_ini+1)
     norm_stop = 0.1e-6      
     
-    cell_number = 100       # cell number for the mesh
-    v_0 = 0.       # speed of left pole
-    v_1 = 0.0006           # speed of right pole before neto
-    v_1_bis = 0.0006        # speed of right pole after neto
-    mid_point = cell_number//2
+    cell_number = 1000       # cell number for the mesh
+    v_0 = 0.0007     # speed of left pole
+    v_1 = 0.0003           # speed of right pole
+    v_1_bis = 0.0007
+    mid_point_l = cell_number//5
+    mid_point_r = cell_number//5*4
 
     uv_array = np.zeros((step_number+1, cell_number+1, 2))  # initalize solutions
     x_array = np.zeros((step_number+1, cell_number+1))      # initalize mesh geometry
@@ -81,10 +84,8 @@ def run_simulation(d=None, gamma=None):
     # Parameters for weak statement of the equations
 
     k = dt
-    if d is None:
-        d = 10
-    if gamma is None:
-        gamma = 100
+    d = 10
+    gamma = 800
     a = 0.1
     b = 0.9
 
@@ -100,7 +101,6 @@ def run_simulation(d=None, gamma=None):
     P1 = element("Lagrange", msh.basix_cell(), 1)
     ME = functionspace(msh, mixed_element([P1, P1]))
     
-    
     #extracting stiffness matrix
     ME_test = functionspace(msh, P1)
     q_test = ufl.TestFunction(ME_test)
@@ -109,17 +109,20 @@ def run_simulation(d=None, gamma=None):
     mass_mat = assemble_matrix(a_mass_mat)
     old_mass = mass_mat.to_dense()
 
+
     # Trial and test functions of the space `ME` are now defined:
 
     q, v = ufl.TestFunctions(ME)
 
     u = Function(ME)  # current solution
     u0 = Function(ME)  # solution from previous converged step
+    m_mass_var = Function(ME)  # function for variation of mass matrix
     
     # Split mixed functions
 
     u1, u2 = ufl.split(u)
     u10, u20 = ufl.split(u0)
+    m_mass_var_1, m_mass_var_2 = ufl.split(m_mass_var)
 
 
     # Interpolate initial condition
@@ -127,56 +130,9 @@ def run_simulation(d=None, gamma=None):
     u.sub(1).interpolate(lambda x: (bv-av)*np.random.rand(x.shape[1]) +av)
 
     u.x.scatter_forward()
-    for i, t in enumerate(time_ini[1:]):
-        
-        u0.x.array[:] = u.x.array
-        
-        
-        u1, u2 = ufl.split(u)
-        u10, u20 = ufl.split(u0)
-
-        # Weak formulation (specific term for mass matrix variation)
-        F = u1/k*q*dx + d1*inner(grad(u1), grad(q))*dx\
-            -(gamma*(u1*u1*u2-u1+a))*q*dx \
-            - (u10/k)*q*dx \
-            + u2/k*v*dx + d2*inner(grad(u2), grad(v))*dx\
-            -(gamma*(-u1*u1*u2+b))*v*dx \
-            - (u20/k)*v*dx
-
-
-        # Create nonlinear problem and Newton solver
-        problem = NonlinearProblem(F, u)
-        solver = NewtonSolver(MPI.COMM_WORLD, problem)
-        solver.convergence_criterion = "incremental"
-        solver.rtol = np.sqrt(np.finfo(default_real_type).eps) * 1e-2
-        ksp = solver.krylov_solver
-        opts = PETSc.Options()  
-        option_prefix = ksp.getOptionsPrefix()
-        opts[f"{option_prefix}ksp_type"] = "preonly"
-        opts[f"{option_prefix}pc_type"] = "lu"
-        ksp.setFromOptions()
-
-        i+=1
-        # solving the variational problem
-        r = solver.solve(u)
-        print(f"Initial Step {i}: num iterations: {r[0]}")
-        
-        # reporting values
-        u1 = u.sub(0).collapse()
-        u2 = u.sub(1).collapse()
-        
-        
-
-
-
-        if np.linalg.norm(u.x.array-u0.x.array)/dt < norm_stop:
-            print("l2_norm convergence")
-            break
     
 
 
-
-    
 
     
     # Output file
@@ -186,9 +142,8 @@ def run_simulation(d=None, gamma=None):
     file2.write_mesh(msh)
 
     # reporting values
-
+    l2_norm = []
     u1 = u.sub(0).collapse()
-    
     u2 = u.sub(1).collapse()
     file1.write_function(u1, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
     file2.write_function(u2, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
@@ -203,10 +158,12 @@ def run_simulation(d=None, gamma=None):
 
     for i, t in enumerate(time_range[1:]):
         
+        x_m = msh.geometry.x[:,0]
+        m_mass_var.x.array[:mid_point_l] = (1+v_0/(x_m[mid_point_l]-x_m[0]))**(-2)
+        m_mass_var.x.array[mid_point_l:mid_point_r] = 1
+        m_mass_var.x.array[mid_point_r:] = (1+v_1/(x_m[-1]-x_m[mid_point_r]))**(-2)
         
-        
-        # Split mixed functions
-
+            # Split mixed functions
         ME_test = functionspace(msh, P1)
         q_test = ufl.TestFunction(ME_test)
         u_test = ufl.TrialFunction(ME_test)
@@ -230,6 +187,24 @@ def run_simulation(d=None, gamma=None):
             + u2/k*v*dx + d2*inner(grad(u2), grad(v))*dx\
             -(gamma*(-u1*u1*u2+b))*v*dx \
             - (u20/k)*v*dx
+            
+        # u1, u2 = ufl.split(u)
+        # u10, u20 = ufl.split(u0)
+        # m_mass_var_1, m_mass_var_2 = ufl.split(m_mass_var)
+        
+        # # # Weak formulation (original)
+        # # F = ((u1 - u10) / k)*q*dx + d1*inner(grad(u1), grad(q))*dx\
+        # # -(gamma*(u1*u1*u2-u1+a))*q*dx \
+        # # + ((u2 - u20) / k)*v*dx + d2*inner(grad(u2), grad(v))*dx\
+        # # -(gamma*(-u1*u1*u2+b))*v*dx 
+        
+        # # Weak formulation (specific term for mass matrix variation)
+        # F = u1/k*q*dx + d1*inner(grad(u1), grad(q))*dx\
+        #     -(gamma*(u1*u1*u2-u1+a))*q*dx \
+        #     - (u10/k*m_mass_var_1)*q*dx \
+        #     + u2/k*v*dx + d2*inner(grad(u2), grad(v))*dx\
+        #     -(gamma*(-u1*u1*u2+b))*v*dx \
+        #     - (u20/k*m_mass_var_2)*v*dx
 
 
         # Create nonlinear problem and Newton solver
@@ -250,6 +225,7 @@ def run_simulation(d=None, gamma=None):
         print(f"Step {i}: num iterations: {r[0]}")
         
         # reporting values
+        l2_norm.append(np.linalg.norm(u.x.array-u0.x.array)/dt)
         u1 = u.sub(0).collapse()
         u2 = u.sub(1).collapse()
         x_array[i] = msh.geometry.x[:,0]
@@ -259,12 +235,11 @@ def run_simulation(d=None, gamma=None):
         u0.x.array[:] = u.x.array
         # updating mesh geometry
         if t<= step_number* dt/2:
-            update_msh(msh, v_0, v_1, mid_point)
+            update_msh(msh, v_0, v_1, mid_point_l, mid_point_r)
         else:
-            update_msh(msh, v_0, v_1_bis, mid_point)
-        old_mass = new_mass
-        
+            update_msh(msh, v_0, v_1_bis, mid_point_l, mid_point_r)
 
+        
         # Save solution to file (VTK)
 
         name = "mesh_at_t"+str(t)
@@ -275,6 +250,10 @@ def run_simulation(d=None, gamma=None):
         file2.write_mesh(msh)
         file2.write_function(u2, t, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
 
+
+        if l2_norm[-1] < norm_stop:
+            print("l2_norm convergence")
+            break
     
 
 
@@ -286,6 +265,7 @@ def run_simulation(d=None, gamma=None):
 
 
 
+    
 def plot(time_range, x_array, uv_array, spacenum, timenum):
     """Plotting the solution of the PDE
 
@@ -327,17 +307,11 @@ def plot(time_range, x_array, uv_array, spacenum, timenum):
     
     
     
-    
 def main():
-    # param = [(10,29),(10,100), (10, 250), (10, 470), (9, 700), (9, 1000), (8.6, 1400), (8.6, 1900)]
-    # for elem in param :
-    #     time_range, x_array, uv_array = run_simulation(d=elem[0], gamma=elem[1])
-    #     plot(time_range, x_array, uv_array, 100, 50)
-    # plt.show()
-    
-    time_range, x_array, uv_array = run_simulation(d=15,gamma=1000)
+    time_range, x_array, uv_array = run_simulation()
     plot(time_range, x_array, uv_array, 200, 50)
     plt.show()
+    
     
     
 if __name__ == '__main__':

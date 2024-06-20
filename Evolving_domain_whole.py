@@ -1,7 +1,6 @@
 
 # # Schnakenberg model
 # +
-
 from mpi4py import MPI
 from petsc4py import PETSc
 
@@ -9,109 +8,39 @@ import numpy as np
 import scipy
 
 
-import gmsh
-
+import matplotlib.pyplot as plt
+import matplotlib.colors as mplc
+from matplotlib import cm
 
 import ufl
 from basix.ufl import element, mixed_element
-from dolfinx import default_real_type, log
-from dolfinx.fem import Function, functionspace,assemble_matrix, form
+from dolfinx import default_real_type, log, plot, mesh
+from dolfinx.fem import Function, functionspace, assemble_matrix, form
 from dolfinx.fem.petsc import NonlinearProblem
-from dolfinx.io import XDMFFile, gmshio
+from dolfinx.io import XDMFFile
+from dolfinx.mesh import GhostMode
 from dolfinx.nls.petsc import NewtonSolver
 from ufl import dx, grad, inner
 
 
-def create_2d_cell_mesh(name):
-    """Create a mesh of a rod shape bacterium 
-
-    Args:
-        name: Name (identifier) of the mesh to add.
-
-    Returns:
-        dolfinx mesh
-
-    """
-    gmsh.initialize()
-    gmsh.option.setNumber("General.Terminal", 0)
-    # Create model
-    model = gmsh.model()
-    model.add(name)
-    model.setCurrent(name)
-    cyl_dim_tags = model.occ.addCylinder(-1.5, 0, 0, 3, 0, 0, 0.5)
-    sphere1_dim_tags = model.occ.addSphere(-1.5, 0, 0, 0.5)
-    sphere2_dim_tags = model.occ.addSphere(1.5, 0, 0, 0.5)
-    model_dim_tags = model.occ.fuse([(3, cyl_dim_tags)], [(3, sphere1_dim_tags),(3, sphere2_dim_tags)])
-    
-    model.occ.synchronize()
-    
-    boundary = model.getBoundary(model_dim_tags[0], oriented=False)
-    boundary_ids = [b[1] for b in boundary]
-    model.addPhysicalGroup(2, boundary_ids, tag=1)
-    model.setPhysicalName(2, 1, "Surface")
-    
-    gmsh.option.setNumber("Mesh.MeshSizeFactor", 0.5)
-    model.mesh.generate(2)
-    
-    filename = f"out_gmsh/mesh_rank_{MPI.COMM_WORLD.rank}.xdmf"
-    msh, ct, ft = gmshio.model_to_mesh(model, MPI.COMM_SELF, rank=0,gdim=3)
-    msh.name = name
-    ct.name = f"{msh.name}_cells"
-    ft.name = f"{msh.name}_facets"
-    with XDMFFile(msh.comm, filename, "w") as file:
-        msh.topology.create_connectivity(1, 2)
-        file.write_mesh(msh)
-        file.write_meshtags(
-            ct, msh.geometry, geometry_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']/Geometry"
-        )
-        file.write_meshtags(
-            ft, msh.geometry, geometry_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']/Geometry"
-        )
-    return msh
-    
-
-
-
-
-def update_msh_1(m, v0, v1):
+def update_msh(m, v0, v1, midpoint0, midpoint1):
     x_cord = m.geometry.x[:,0]
-    min_x = np.min(x_cord)
-    max_x = np.max(x_cord)
-    d0 = (min_x-v0)/min_x
-    d1 = (max_x+v1)/max_x
-    mov = d0 * (x_cord<0).astype(float) + d1 * (x_cord>0).astype(float) 
-
-
-    m.geometry.x[:,0] = m.geometry.x[:,0]*mov
-    
-
-def update_msh_2(m, v0, v1):
-    x_cord = m.geometry.x[:,0]
-    
-    min_x = np.min(x_cord)
-    max_x = np.max(x_cord)
-    left_s = min_x + 0.5
-    right_s = max_x - 0.5
-    
-    point_l = -1
-    point_r = 1
-    
     mov = np.zeros(np.shape(x_cord))
-    mov[x_cord<=left_s] = -v0
-    mov[x_cord>=right_s] = v1
-    mask = np.logical_and(x_cord > left_s, x_cord < point_l)
-    mov[mask] = v0*(x_cord[mask] - point_l)/(point_l-left_s)
-    mask = np.logical_and(x_cord < right_s, x_cord > point_r)
-    mov[mask] = v1*(x_cord[mask] - point_r)/(right_s - point_r)
 
-    m.geometry.x[:,0] = m.geometry.x[:,0] + mov
+    x_2 = x_cord[-1]
+    x_1 = x_cord[0]
     
 
+    mov[:midpoint0] = v0*(x_cord[:midpoint0] - x_cord[midpoint0])/(x_cord[midpoint0]-x_1)
+    mov[midpoint1+1:] = v1*(x_cord[midpoint1+1:] - x_cord[midpoint1])/(x_2-x_cord[midpoint1])
 
 
+    m.geometry.x[:,0] = m.geometry.x[:,0]+mov
     
     
-def run_simulation():
+    
+    
+def run_simulation(d=None, gamma=None):
     """Simulation of RD system on evolving domains
 
     Returns:
@@ -127,17 +56,24 @@ def run_simulation():
     
     # Next, various model parameters are defined:
 
-    dt = 5e-4          # time step 5.0e-04 
-    step_number = 3000      # time step number
-    step_ini = 3000
+    dt = 5.0e-04            # time step
+    step_number = 2000      # time step number
+    step_ini = 1500
     
     time_range = np.linspace(0, step_number* dt,  step_number+1)
     time_ini = np.linspace(0, step_ini* dt,  step_ini+1)
+    norm_stop = 0.1e-6      
     
-    v_0 = 0.0005        # speed of left pole
-    v_1 = 0.0005           # speed of right pole
-    norm_stop = 0.1e-6  
-    
+    cell_number = 500       # cell number for the mesh
+    v_0 = 0.0006      # speed of left pole
+    v_1 = 0.0003           # speed of right pole before neto
+    v_1_bis = 0.0006        # speed of right pole after neto
+    mid_point_l = cell_number//5
+    mid_point_r = cell_number//5*4
+
+    uv_array = np.zeros((step_number+1, cell_number+1, 2))  # initalize solutions
+    x_array = np.zeros((step_number+1, cell_number+1))      # initalize mesh geometry
+
     #initial conditions
     au = 1
     bu = 1.1
@@ -147,8 +83,10 @@ def run_simulation():
     # Parameters for weak statement of the equations
 
     k = dt
-    d = 10
-    gamma = 500
+    if d is None:
+        d = 10
+    if gamma is None:
+        gamma = 100
     a = 0.1
     b = 0.9
 
@@ -158,16 +96,18 @@ def run_simulation():
 
     # mesh and linear lagrange elements are created
 
-    msh = create_2d_cell_mesh('cell')
-    P1 = element("Lagrange", msh.basix_cell(), 1, gdim=msh.ufl_cell().geometric_dimension())
-    ME = functionspace(msh, mixed_element([P1, P1], gdim=msh.ufl_cell().geometric_dimension())) 
+    msh = mesh.create_unit_interval(comm=MPI.COMM_WORLD,
+                                nx=cell_number,
+                                ghost_mode=GhostMode.shared_facet)
+    P1 = element("Lagrange", msh.basix_cell(), 1)
+    ME = functionspace(msh, mixed_element([P1, P1]))
     
     
     #extracting stiffness matrix
     ME_test = functionspace(msh, P1)
     q_test = ufl.TestFunction(ME_test)
     u_test = ufl.TrialFunction(ME_test)
-    a_mass_mat = form( u_test * q_test * dx)
+    a_mass_mat =form( u_test * q_test * dx)
     mass_mat = assemble_matrix(a_mass_mat)
     old_mass = mass_mat.to_dense()
 
@@ -189,16 +129,14 @@ def run_simulation():
     u.sub(1).interpolate(lambda x: (bv-av)*np.random.rand(x.shape[1]) +av)
 
     u.x.scatter_forward()
-    
-
     for i, t in enumerate(time_ini[1:]):
         
-        
         u0.x.array[:] = u.x.array
+        
+        
         u1, u2 = ufl.split(u)
         u10, u20 = ufl.split(u0)
-        
-        
+
         # Weak formulation (specific term for mass matrix variation)
         F = u1/k*q*dx + d1*inner(grad(u1), grad(q))*dx\
             -(gamma*(u1*u1*u2-u1+a))*q*dx \
@@ -225,37 +163,44 @@ def run_simulation():
         r = solver.solve(u)
         print(f"Initial Step {i}: num iterations: {r[0]}")
         
-        if np.linalg.norm(u.x.array-u0.x.array)/dt < norm_stop:
-            print("l2_norm convergence")
-            break
+        # reporting values
+        u1 = u.sub(0).collapse()
+        u2 = u.sub(1).collapse()
+        
         
 
 
 
+        if np.linalg.norm(u.x.array-u0.x.array)/dt < norm_stop:
+            print("l2_norm convergence")
+            break
+    
+
+
+
+    
 
     
     # Output file
-    file1 = XDMFFile(MPI.COMM_WORLD, "Schnakenberg2D/outputu1.xdmf", "w")
+    file1 = XDMFFile(MPI.COMM_WORLD, "Schnakenberg1D/outputu1.xdmf", "w")
     file1.write_mesh(msh)
-    file2 = XDMFFile(MPI.COMM_WORLD, "Schnakenberg2D/outputu2.xdmf", "w")
+    file2 = XDMFFile(MPI.COMM_WORLD, "Schnakenberg1D/outputu2.xdmf", "w")
     file2.write_mesh(msh)
 
-    
-    
-    
-    
-    
-    
-    
     # reporting values
+
     u1 = u.sub(0).collapse()
+    
     u2 = u.sub(1).collapse()
     file1.write_function(u1, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
     file2.write_function(u2, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
     u0.x.array[:] = u.x.array
     
+    x_array[0] = msh.geometry.x[:,0]
+    uv_array[0,:,0] = u1.x.array
+    uv_array[0,:,1] = u2.x.array
 
-    
+
 
 
     for i, t in enumerate(time_range[1:]):
@@ -309,11 +254,16 @@ def run_simulation():
         # reporting values
         u1 = u.sub(0).collapse()
         u2 = u.sub(1).collapse()
+        x_array[i] = msh.geometry.x[:,0]
+        uv_array[i,:,0] = u1.x.array
+        uv_array[i,:,1] = u2.x.array
         
         u0.x.array[:] = u.x.array
         # updating mesh geometry
-        update_msh_2(msh, v_0, v_1)
-
+        if t<= step_number* dt/2:
+            update_msh(msh, v_0, v_1, mid_point_l, mid_point_r)
+        else:
+            update_msh(msh, v_0, v_1_bis, mid_point_l, mid_point_r)
         old_mass = new_mass
 
         # Save solution to file (VTK)
@@ -326,24 +276,69 @@ def run_simulation():
         file2.write_mesh(msh)
         file2.write_function(u2, t, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
 
-
     
 
 
     file1.close()
     file2.close()
     
+    return time_range, x_array, uv_array
 
 
 
 
+def plot(time_range, x_array, uv_array, spacenum, timenum):
+    """Plotting the solution of the PDE
+
+    Args:
+        time_range (1d array): time of the solutions
+        x_array (2d array): mesh geometry over time
+        uv_array (3d array): values of solutions over time
+        spacenum (int): number of space steps for plot
+        timenum (int): number of time steps for plot
+    """
+
+    # extracting data at the right place
+    T_steps = np.linspace(0, len(time_range)-1, timenum, dtype=int)
+    x_steps = np.linspace(0, len(x_array[0])-1, spacenum, dtype=int)
+    
+    vmin = np.min(uv_array[:,:,1][T_steps][:,x_steps])
+    vmax = np.max(uv_array[:,:,1][T_steps][:,x_steps])
+    umin = np.min(uv_array[:,:,0][T_steps][:,x_steps])
+    umax = np.max(uv_array[:,:,0][T_steps][:,x_steps])
+    
+    # plotting U
+    fig, ax = plt.subplots()
+    plt.title('U')
+    for i in T_steps:
+        ax.scatter(x_array[i][x_steps], time_range[i]* np.ones(len(x_steps)), c=uv_array[i,:,0][x_steps], cmap="viridis", edgecolor='none', norm=mplc.Normalize(vmin=umin, vmax=umax))
+    ax.set_xlabel('x')
+    ax.set_ylabel('T')
+    fig.colorbar(cm.ScalarMappable(norm=mplc.Normalize(vmin=umin, vmax=umax), cmap="viridis"), ax=ax)
+    
+    # plotting V
+    fig, ax = plt.subplots()
+    plt.title('V')
+    for i in T_steps:
+        ax.scatter(x_array[i][x_steps], time_range[i]* np.ones(len(x_steps)), c=uv_array[i,:,1][x_steps], cmap="viridis", edgecolor='none', norm=mplc.Normalize(vmin=vmin, vmax=vmax)) 
+    ax.set_xlabel('x')
+    ax.set_ylabel('T')
+    fig.colorbar(cm.ScalarMappable(norm=mplc.Normalize(vmin=umin, vmax=umax), cmap="viridis"), ax=ax)
+    # plt.show()
     
     
     
     
 def main():
-    run_simulation()
+    # param = [(10,29),(10,100), (10, 250), (10, 470), (9, 700), (9, 1000), (8.6, 1400), (8.6, 1900)]
+    # for elem in param :
+    #     time_range, x_array, uv_array = run_simulation(d=elem[0], gamma=elem[1])
+    #     plot(time_range, x_array, uv_array, 100, 50)
+    # plt.show()
     
+    time_range, x_array, uv_array = run_simulation(gamma=500)
+    plot(time_range, x_array, uv_array, 500, 50)
+    plt.show()
     
     
 if __name__ == '__main__':
