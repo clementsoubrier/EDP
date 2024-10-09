@@ -8,6 +8,8 @@ import numpy as np
 import scipy
 
 
+from multiprocessing import Pool
+
 import matplotlib.pyplot as plt
 import matplotlib.colors as mplc
 from matplotlib import cm
@@ -56,7 +58,7 @@ def run_simulation(d=None, gamma=None):
     
     # Next, various model parameters are defined:
 
-    dt = 5.0e-04            # time step
+    dt = 4.0e-04            # time step
     step_number = 2000      # time step number
     step_ini = 1500
     
@@ -65,9 +67,9 @@ def run_simulation(d=None, gamma=None):
     norm_stop = 0.1e-6      
     
     cell_number = 500       # cell number for the mesh
-    v_0 = 0.0006      # speed of left pole
-    v_1 = 0.0003           # speed of right pole before neto
-    v_1_bis = 0.0006        # speed of right pole after neto
+    v_0 = 0.0004      # speed of left pole
+    v_1 = 0.0002           # speed of right pole before neto
+    v_1_bis = 0.0004        # speed of right pole after neto
     mid_point_l = cell_number//5
     mid_point_r = cell_number//5*4
 
@@ -181,19 +183,19 @@ def run_simulation(d=None, gamma=None):
     
 
     
-    # Output file
-    file1 = XDMFFile(MPI.COMM_WORLD, "Schnakenberg1D/outputu1.xdmf", "w")
-    file1.write_mesh(msh)
-    file2 = XDMFFile(MPI.COMM_WORLD, "Schnakenberg1D/outputu2.xdmf", "w")
-    file2.write_mesh(msh)
+    # # Output file
+    # file1 = XDMFFile(MPI.COMM_WORLD, "Schnakenberg1D/outputu1.xdmf", "w")
+    # file1.write_mesh(msh)
+    # file2 = XDMFFile(MPI.COMM_WORLD, "Schnakenberg1D/outputu2.xdmf", "w")
+    # file2.write_mesh(msh)
 
     # reporting values
 
     u1 = u.sub(0).collapse()
     
     u2 = u.sub(1).collapse()
-    file1.write_function(u1, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
-    file2.write_function(u2, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
+    # file1.write_function(u1, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
+    # file2.write_function(u2, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
     u0.x.array[:] = u.x.array
     
     x_array[0] = msh.geometry.x[:,0]
@@ -271,23 +273,23 @@ def run_simulation(d=None, gamma=None):
         name = "mesh_at_t"+str(t)
         msh.name = name
 
-        file1.write_mesh(msh)
-        file1.write_function(u1, t, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
-        file2.write_mesh(msh)
-        file2.write_function(u2, t, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
+        # file1.write_mesh(msh)
+        # file1.write_function(u1, t, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
+        # file2.write_mesh(msh)
+        # file2.write_function(u2, t, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
 
     
 
 
-    file1.close()
-    file2.close()
+    # file1.close()
+    # file2.close()
     
     return time_range, x_array, uv_array
 
 
 
 
-def plot(time_range, x_array, uv_array, spacenum, timenum):
+def plot(time_range, x_array, uv_array, spacenum, timenum, gamma='',d=''):
     """Plotting the solution of the PDE
 
     Args:
@@ -309,11 +311,11 @@ def plot(time_range, x_array, uv_array, spacenum, timenum):
     
     # plotting U
     fig, ax = plt.subplots()
-    plt.title('U')
+    plt.title('U '+str(gamma) + ' '+str(d))
     for i in T_steps:
         ax.scatter(x_array[i][x_steps], time_range[i]* np.ones(len(x_steps)), c=uv_array[i,:,0][x_steps], cmap="viridis", edgecolor='none', norm=mplc.Normalize(vmin=umin, vmax=umax))
-    ax.set_xlabel('x')
-    ax.set_ylabel('T')
+    ax.set_xlabel('centerline length (a.u.)')
+    ax.set_ylabel('time (a.u.)')
     fig.colorbar(cm.ScalarMappable(norm=mplc.Normalize(vmin=umin, vmax=umax), cmap="viridis"), ax=ax)
     
     # plotting V
@@ -327,7 +329,150 @@ def plot(time_range, x_array, uv_array, spacenum, timenum):
     # plt.show()
     
     
+        
+
+def wavelenght_plot(gamma_list):
+    wavelength = np.zeros(len(gamma_list))
+    for i_w,gamma in enumerate(gamma_list):
+        ''' Parameters '''
+        # Save all logging to file
+        log.set_output_file("log.txt")
+        # -
+        
+        # Next, various model parameters are defined:
+        tot_len = 30
+        dt = 4.0e-04            # time step
+        step_ini = 3000
+        
+        time_ini = np.linspace(0, step_ini* dt,  step_ini+1)
+        
+        cell_number = 1000       # cell number for the mesh
+
+
+        #initial conditions
+        au = 1
+        bu = 1.1
+        av = 0.9
+        bv = 0.95
+
+        # Parameters for weak statement of the equations
+
+        k = dt
+        d = 10
+        a = 0.1
+        b = 0.9
+
+        d1 = 1.0
+        d2 = d
+
+
+        # mesh and linear lagrange elements are created
+
+        msh = mesh.create_unit_interval(comm=MPI.COMM_WORLD,
+                                    nx=cell_number,
+                                    ghost_mode=GhostMode.shared_facet)
+        P1 = element("Lagrange", msh.basix_cell(), 1)
+        ME = functionspace(msh, mixed_element([P1, P1]))
+        
+        
+        msh.geometry.x[:,0] = tot_len * msh.geometry.x[:,0]
+        # Trial and test functions of the space `ME` are now defined:
+
+        q, v = ufl.TestFunctions(ME)
+
+        u = Function(ME)  # current solution
+        u0 = Function(ME)  # solution from previous converged step
+        
+        # Split mixed functions
+
+        u1, u2 = ufl.split(u)
+        u10, u20 = ufl.split(u0)
+
+
+        # Interpolate initial condition
+        u.sub(0).interpolate(lambda x: (bu-au)*np.random.rand(x.shape[1]) +au)
+        u.sub(1).interpolate(lambda x: (bv-av)*np.random.rand(x.shape[1]) +av)
+
+        u.x.scatter_forward()
+        for i, t in enumerate(time_ini[1:]):
+            
+            u0.x.array[:] = u.x.array
+            
+            
+            u1, u2 = ufl.split(u)
+            u10, u20 = ufl.split(u0)
+
+            # Weak formulation (specific term for mass matrix variation)
+            F = u1/k*q*dx + d1*inner(grad(u1), grad(q))*dx\
+                -(gamma*(u1*u1*u2-u1+a))*q*dx \
+                - (u10/k)*q*dx \
+                + u2/k*v*dx + d2*inner(grad(u2), grad(v))*dx\
+                -(gamma*(-u1*u1*u2+b))*v*dx \
+                - (u20/k)*v*dx
+
+
+            # Create nonlinear problem and Newton solver
+            problem = NonlinearProblem(F, u)
+            solver = NewtonSolver(MPI.COMM_WORLD, problem)
+            solver.convergence_criterion = "incremental"
+            solver.rtol = np.sqrt(np.finfo(default_real_type).eps) * 1e-2
+            ksp = solver.krylov_solver
+            opts = PETSc.Options()  
+            option_prefix = ksp.getOptionsPrefix()
+            opts[f"{option_prefix}ksp_type"] = "preonly"
+            opts[f"{option_prefix}pc_type"] = "lu"
+            ksp.setFromOptions()
+
+            i+=1
+            # solving the variational problem
+            r = solver.solve(u)
+            print(f"Initial Step {i}: num iterations: {r[0]}")
+            
+            # reporting values
+            u1 = u.sub(0).collapse()
+            u2 = u.sub(1).collapse()
+            
+        
+        # reporting values
+
+        u1 = u.sub(0).collapse()
+        
+        u2 = u.sub(1).collapse()
+        u0.x.array[:] = u.x.array
+        
+        U = u1.x.array
+        is_pos = ( U[1:]- U[:-1]) >= 0
+        sign_change = np.logical_xor(is_pos[1:], is_pos[:-1])
+        intern_extrema =  np.flatnonzero(sign_change) / cell_number*tot_len
+        print(intern_extrema)
+        wavelength[i_w] = 2*np.mean(intern_extrema[1:]-intern_extrema[:-1])
     
+    plt.rcParams.update({'font.size': 13})
+    plt.title('Pattern wavelength vs gamma')
+    
+    plt.scatter(gamma_list, wavelength, color = 'k')
+    plt.xlabel(r'$\gamma$ (a.u.)')
+    plt.ylabel('Pattern wavelength (a.u.)')
+    plt.show()
+    plt.rcParams.update({'font.size': 10})
+    
+    
+def multi_simu(i):
+    return run_simulation()
+    
+def create_dataset(number):
+    output = {}
+    count = 0
+    # with Pool(processes=8) as pool:
+    #     for time_range, x_array, uv_array in pool.imap_unordered(multi_simu, range(number)):
+    for i in range (number):
+            time_range, x_array, uv_array  = run_simulation()
+            output[count]={'t' : time_range, 'x' : x_array, 'val' : uv_array}
+            count+=1
+    print(1)
+    np.savez_compressed('/home/c.soubrier/Documents/UBC_Vancouver/Projets_recherche/AFM/afm_pipeline/data/simulations/res3.npz', output)
+    
+
     
 def main():
     # param = [(10,29),(10,100), (10, 250), (10, 470), (9, 700), (9, 1000), (8.6, 1400), (8.6, 1900)]
@@ -335,13 +480,16 @@ def main():
     #     time_range, x_array, uv_array = run_simulation(d=elem[0], gamma=elem[1])
     #     plot(time_range, x_array, uv_array, 100, 50)
     # plt.show()
-    
-    time_range, x_array, uv_array = run_simulation(gamma=500)
-    plot(time_range, x_array, uv_array, 500, 50)
+    d=10
+    plt.rcParams.update({'font.size': 13})
+    for gamma in [1500]:
+        time_range, x_array, uv_array = run_simulation(gamma=gamma, d=d)
+        plot(time_range, x_array, uv_array, 500, 50, gamma=gamma, d=d)
     plt.show()
-    
+    plt.rcParams.update({'font.size': 10})
     
 if __name__ == '__main__':
-    main()
-
+    # main()
+    # wavelenght_plot(np.linspace(400,2000,30))
+    create_dataset(100)
 
