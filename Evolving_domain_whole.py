@@ -88,7 +88,7 @@ def run_simulation(d=None, gamma=None):
     if d is None:
         d = 10
     if gamma is None:
-        gamma = 100
+        gamma = 800
     a = 0.1
     b = 0.9
 
@@ -490,6 +490,9 @@ def main():
     
 if __name__ == '__main__':
     # main()
+    # time_range, x_array, uv_array = run_simulation()
+    # plot(time_range, x_array, uv_array, 500, 50)
+    # plt.show()
     # wavelenght_plot(np.linspace(400,2000,30))
-    create_dataset(100)
+    create_dataset(1000)
 

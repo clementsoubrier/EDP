@@ -65,8 +65,8 @@ def run_simulation(d=None, gamma=None):
     
     cell_number = 100       # cell number for the mesh
     v_0 = 0.       # speed of left pole
-    v_1 = 0.0006           # speed of right pole before neto
-    v_1_bis = 0.0006        # speed of right pole after neto
+    v_1 = 0.0003           # speed of right pole before neto
+    v_1_bis = 0.0003        # speed of right pole after neto
     mid_point = cell_number//2
 
     uv_array = np.zeros((step_number+1, cell_number+1, 2))  # initalize solutions
@@ -311,8 +311,8 @@ def plot(time_range, x_array, uv_array, spacenum, timenum):
     plt.title('U')
     for i in T_steps:
         ax.scatter(x_array[i][x_steps], time_range[i]* np.ones(len(x_steps)), c=uv_array[i,:,0][x_steps], cmap="viridis", edgecolor='none', norm=mplc.Normalize(vmin=umin, vmax=umax))
-    ax.set_xlabel('x')
-    ax.set_ylabel('T')
+    ax.set_xlabel('centerline length (a.u.)')
+    ax.set_ylabel('time (a.u.)')
     fig.colorbar(cm.ScalarMappable(norm=mplc.Normalize(vmin=umin, vmax=umax), cmap="viridis"), ax=ax)
     
     # plotting V
@@ -320,8 +320,8 @@ def plot(time_range, x_array, uv_array, spacenum, timenum):
     plt.title('V')
     for i in T_steps:
         ax.scatter(x_array[i][x_steps], time_range[i]* np.ones(len(x_steps)), c=uv_array[i,:,1][x_steps], cmap="viridis", edgecolor='none', norm=mplc.Normalize(vmin=vmin, vmax=vmax)) 
-    ax.set_xlabel('x')
-    ax.set_ylabel('T')
+    ax.set_xlabel('centerline length (a.u.)')
+    ax.set_ylabel('time (a.u.)')
     fig.colorbar(cm.ScalarMappable(norm=mplc.Normalize(vmin=umin, vmax=umax), cmap="viridis"), ax=ax)
     # plt.show()
     
@@ -335,8 +335,10 @@ def main():
     #     plot(time_range, x_array, uv_array, 100, 50)
     # plt.show()
     
-    time_range, x_array, uv_array = run_simulation(d=15,gamma=1000)
+    time_range, x_array, uv_array = run_simulation(d=10,gamma=600)
+    plt.rcParams.update({'font.size': 13})
     plot(time_range, x_array, uv_array, 200, 50)
+    plt.rcParams.update({'font.size': 10})
     plt.show()
     
     
