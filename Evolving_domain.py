@@ -335,7 +335,7 @@ def main():
     #     plot(time_range, x_array, uv_array, 100, 50)
     # plt.show()
     
-    time_range, x_array, uv_array = run_simulation(d=10,gamma=600)
+    time_range, x_array, uv_array = run_simulation(d=10,gamma=100)
     plt.rcParams.update({'font.size': 13})
     plot(time_range, x_array, uv_array, 200, 50)
     plt.rcParams.update({'font.size': 10})

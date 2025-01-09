@@ -25,16 +25,18 @@ from dolfinx.nls.petsc import NewtonSolver
 from ufl import dx, grad, inner
 
 
-def update_msh(m, v0, v1, midpoint0, midpoint1):
+def update_msh(m, v0, v1, pole_len):
     x_cord = m.geometry.x[:,0]
     mov = np.zeros(np.shape(x_cord))
 
     x_2 = x_cord[-1]
     x_1 = x_cord[0]
     
+    midpoint0 = np.flatnonzero(x_cord>x_1+pole_len)[0]
+    midpoint1 = np.flatnonzero(x_cord>x_2-pole_len)[0]
 
     mov[:midpoint0] = v0*(x_cord[:midpoint0] - x_cord[midpoint0])/(x_cord[midpoint0]-x_1)
-    mov[midpoint1+1:] = v1*(x_cord[midpoint1+1:] - x_cord[midpoint1])/(x_2-x_cord[midpoint1])
+    mov[midpoint1:] = v1*(x_cord[midpoint1:] - x_cord[midpoint1-1])/(x_2-x_cord[midpoint1-1])
 
 
     m.geometry.x[:,0] = m.geometry.x[:,0]+mov
@@ -42,7 +44,7 @@ def update_msh(m, v0, v1, midpoint0, midpoint1):
     
     
     
-def run_simulation(d=None, gamma=None):
+def run_simulation(param):
     """Simulation of RD system on evolving domains
 
     Returns:
@@ -54,8 +56,8 @@ def run_simulation(d=None, gamma=None):
     ''' Parameters '''
     # Save all logging to file
     log.set_output_file("log.txt")
-    # -
-    
+    # Extracting parameters
+    a, b, d, gamma = param
     # Next, various model parameters are defined:
 
     dt = 4.0e-04            # time step
@@ -66,12 +68,11 @@ def run_simulation(d=None, gamma=None):
     time_ini = np.linspace(0, step_ini* dt,  step_ini+1)
     norm_stop = 0.1e-6      
     
-    cell_number = 500       # cell number for the mesh
+    cell_number = 600       # cell number for the mesh
     v_0 = 0.0004      # speed of left pole
     v_1 = 0.0002           # speed of right pole before neto
     v_1_bis = 0.0004        # speed of right pole after neto
-    mid_point_l = cell_number//5
-    mid_point_r = cell_number//5*4
+    pole_len = 0.4
 
     uv_array = np.zeros((step_number+1, cell_number+1, 2))  # initalize solutions
     x_array = np.zeros((step_number+1, cell_number+1))      # initalize mesh geometry
@@ -85,13 +86,6 @@ def run_simulation(d=None, gamma=None):
     # Parameters for weak statement of the equations
 
     k = dt
-    if d is None:
-        d = 10
-    if gamma is None:
-        gamma = 800
-    a = 0.1
-    b = 0.9
-
     d1 = 1.0
     d2 = d
 
@@ -131,6 +125,8 @@ def run_simulation(d=None, gamma=None):
     u.sub(1).interpolate(lambda x: (bv-av)*np.random.rand(x.shape[1]) +av)
 
     u.x.scatter_forward()
+    
+
     for i, t in enumerate(time_ini[1:]):
         
         u0.x.array[:] = u.x.array
@@ -176,6 +172,7 @@ def run_simulation(d=None, gamma=None):
         if np.linalg.norm(u.x.array-u0.x.array)/dt < norm_stop:
             print("l2_norm convergence")
             break
+
     
 
 
@@ -263,9 +260,9 @@ def run_simulation(d=None, gamma=None):
         u0.x.array[:] = u.x.array
         # updating mesh geometry
         if t<= step_number* dt/2:
-            update_msh(msh, v_0, v_1, mid_point_l, mid_point_r)
+            update_msh(msh, v_0, v_1, pole_len)
         else:
-            update_msh(msh, v_0, v_1_bis, mid_point_l, mid_point_r)
+            update_msh(msh, v_0, v_1_bis, pole_len)
         old_mass = new_mass
 
         # Save solution to file (VTK)
@@ -284,12 +281,12 @@ def run_simulation(d=None, gamma=None):
     # file1.close()
     # file2.close()
     
-    return time_range, x_array, uv_array
+    return time_range, x_array, uv_array , param
 
 
 
 
-def plot(time_range, x_array, uv_array, spacenum, timenum, gamma='',d=''):
+def plot(time_range, x_array, uv_array, spacenum, timenum, param, saving=False):
     """Plotting the solution of the PDE
 
     Args:
@@ -299,7 +296,7 @@ def plot(time_range, x_array, uv_array, spacenum, timenum, gamma='',d=''):
         spacenum (int): number of space steps for plot
         timenum (int): number of time steps for plot
     """
-
+    a, b, d, gamma =  param
     # extracting data at the right place
     T_steps = np.linspace(0, len(time_range)-1, timenum, dtype=int)
     x_steps = np.linspace(0, len(x_array[0])-1, spacenum, dtype=int)
@@ -311,21 +308,28 @@ def plot(time_range, x_array, uv_array, spacenum, timenum, gamma='',d=''):
     
     # plotting U
     fig, ax = plt.subplots()
-    plt.title('U '+str(gamma) + ' '+str(d))
+    plt.title(f'U, a {a:.2f}, b {b:.2f}, gam {gamma:.2f}, d {d:.2f}')
     for i in T_steps:
         ax.scatter(x_array[i][x_steps], time_range[i]* np.ones(len(x_steps)), c=uv_array[i,:,0][x_steps], cmap="viridis", edgecolor='none', norm=mplc.Normalize(vmin=umin, vmax=umax))
     ax.set_xlabel('centerline length (a.u.)')
     ax.set_ylabel('time (a.u.)')
     fig.colorbar(cm.ScalarMappable(norm=mplc.Normalize(vmin=umin, vmax=umax), cmap="viridis"), ax=ax)
+    if saving:
+        plt.savefig(f'Schnakenberg1D/U_a{a:.2f}_b {b:.2f}_gam{gamma:.2f}_d{d:.2f}.svg', format='svg')
+        plt.close()
+    
     
     # plotting V
     fig, ax = plt.subplots()
-    plt.title('V')
+    plt.title(f'V, a {a:.2f}, b {b:.2f}, gam {gamma:.2f}, d {d:.2f}')
     for i in T_steps:
         ax.scatter(x_array[i][x_steps], time_range[i]* np.ones(len(x_steps)), c=uv_array[i,:,1][x_steps], cmap="viridis", edgecolor='none', norm=mplc.Normalize(vmin=vmin, vmax=vmax)) 
     ax.set_xlabel('x')
     ax.set_ylabel('T')
     fig.colorbar(cm.ScalarMappable(norm=mplc.Normalize(vmin=umin, vmax=umax), cmap="viridis"), ax=ax)
+    if saving:
+        plt.savefig(f'Schnakenberg1D/V_a{a:.2f}_b {b:.2f}_gam{gamma:.2f}_d{d:.2f}.svg', format='svg')
+        plt.close()
     # plt.show()
     
     
@@ -458,7 +462,7 @@ def wavelenght_plot(gamma_list):
     
     
 def multi_simu(i):
-    return run_simulation()
+    return run_simulation([0.1, 0.9, 10, 200])
     
 def create_dataset(number):
     output = {}
@@ -473,26 +477,61 @@ def create_dataset(number):
     np.savez_compressed('/home/c.soubrier/Documents/UBC_Vancouver/Projets_recherche/AFM/afm_pipeline/data/simulations/res3.npz', output)
     
 
+def parameter_analysis():
+    num = 7
+    a = np.linspace(0.1,3,num)
+    b = np.linspace(0.1,3,num)
+    d = np.linspace(10,30,num)
+    gamma = np.linspace(100,1500,num)
+    table = np.array(np.meshgrid(a, b, d, gamma)).T.reshape(-1,4)
+    with Pool(processes=8) as pool:
+        for time_range, x_array, uv_array, param in pool.imap_unordered(run_simulation, table):
+            plot(time_range, x_array, uv_array, 500, 50, param, saving=True)
+
     
-def main():
-    # param = [(10,29),(10,100), (10, 250), (10, 470), (9, 700), (9, 1000), (8.6, 1400), (8.6, 1900)]
-    # for elem in param :
-    #     time_range, x_array, uv_array = run_simulation(d=elem[0], gamma=elem[1])
-    #     plot(time_range, x_array, uv_array, 100, 50)
-    # plt.show()
-    d=10
+
+
+def wave_var():
+    
     plt.rcParams.update({'font.size': 13})
-    for gamma in [1500]:
-        time_range, x_array, uv_array = run_simulation(gamma=gamma, d=d)
-        plot(time_range, x_array, uv_array, 500, 50, gamma=gamma, d=d)
+    param = [0.1, 0.9, 10, 800]
+    time_range, x_array, uv_array, _ = run_simulation(param)
+    res = np.array(time_range)
+    plot(time_range, x_array, uv_array, 500, 50, param)
+    
+    plt.figure()
+    for i in range(len(uv_array)):
+        U = uv_array[i,:,0]
+        is_pos = ( U[1:]- U[:-1]) >= 0
+        sign_change = np.logical_xor(is_pos[1:], is_pos[:-1])
+        ind = np.flatnonzero(sign_change)
+        intern_extrema = x_array[i,ind]
+        res[i] = 2*np.median(intern_extrema[1:]-intern_extrema[:-1])
+    plt.scatter(time_range, res, c='k')
+    plt.xlabel('Time (u.a.)')
+    plt.ylabel('Pattern wavelength (u.a.)')
+    plt.show()
+    
+    plt.rcParams.update({'font.size': 10})
+    
+    
+def main(a,b,d,gamma):
+
+    plt.rcParams.update({'font.size': 13})
+    time_range, x_array, uv_array = run_simulation([a, b, d, gamma])
+    plot(time_range, x_array, uv_array, 500, 50, [a, b, d, gamma])
     plt.show()
     plt.rcParams.update({'font.size': 10})
     
+
+
 if __name__ == '__main__':
-    # main()
+    # af,bf,df,gammaf = [0.1, 0.9, 10, 200]
+    # parameter_analysis()
+    wave_var()
     # time_range, x_array, uv_array = run_simulation()
     # plot(time_range, x_array, uv_array, 500, 50)
     # plt.show()
     # wavelenght_plot(np.linspace(400,2000,30))
-    create_dataset(1000)
+    # create_dataset(1000)
 

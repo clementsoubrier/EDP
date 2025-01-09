@@ -50,7 +50,7 @@ def create_2d_cell_mesh(name):
     model.addPhysicalGroup(2, boundary_ids, tag=1)
     model.setPhysicalName(2, 1, "Surface")
     
-    gmsh.option.setNumber("Mesh.MeshSizeFactor", 0.5)
+    gmsh.option.setNumber("Mesh.MeshSizeFactor", 0.5) # resolution 0.4
     model.mesh.generate(2)
     
     filename = f"out_gmsh/mesh_rank_{MPI.COMM_WORLD.rank}.xdmf"
@@ -127,15 +127,15 @@ def run_simulation():
     
     # Next, various model parameters are defined:
 
-    dt = 5e-4          # time step 5.0e-04 
-    step_number = 3000      # time step number
-    step_ini = 3000
+    dt = 1e-3          # time step 5.0e-04 
+    step_number = 500     # time step number
+    step_ini = 500
     
     time_range = np.linspace(0, step_number* dt,  step_number+1)
     time_ini = np.linspace(0, step_ini* dt,  step_ini+1)
     
     v_0 = 0.0005        # speed of left pole
-    v_1 = 0.0005           # speed of right pole
+    v_1 = 0.0005          # speed of right pole
     norm_stop = 0.1e-6  
     
     #initial conditions
@@ -147,8 +147,8 @@ def run_simulation():
     # Parameters for weak statement of the equations
 
     k = dt
-    d = 10
-    gamma = 500
+    d = 9
+    gamma = 50
     a = 0.1
     b = 0.9
 
@@ -159,8 +159,8 @@ def run_simulation():
     # mesh and linear lagrange elements are created
 
     msh = create_2d_cell_mesh('cell')
-    P1 = element("Lagrange", msh.basix_cell(), 1, gdim=msh.ufl_cell().geometric_dimension())
-    ME = functionspace(msh, mixed_element([P1, P1], gdim=msh.ufl_cell().geometric_dimension())) 
+    P1 = element("Lagrange", msh.basix_cell(), 1) #gdim=msh.ufl_cell().geometric_dimension()
+    ME = functionspace(msh, mixed_element([P1, P1])) 
     
     
     #extracting stiffness matrix
@@ -250,6 +250,7 @@ def run_simulation():
     # reporting values
     u1 = u.sub(0).collapse()
     u2 = u.sub(1).collapse()
+
     file1.write_function(u1, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
     file2.write_function(u2, 0, mesh_xpath=f"/Xdmf/Domain/Grid[@Name='{msh.name}']")
     u0.x.array[:] = u.x.array
